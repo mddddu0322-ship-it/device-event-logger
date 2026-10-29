@@ -74,6 +74,7 @@ test("MCP advertises five tools and separates control permission from records", 
   assert.equal((await call("query_events", { hours: 1 }, "mcp_at_legacy")).isError, false);
   const denied = await call("set_app_control", { app: "小红书", enabled: true, duration_minutes: 1 }, "mcp_at_legacy");
   assert.equal(denied.isError, true); assert.match(denied._meta["mcp/www_authenticate"][0], /insufficient_scope/);
+  assert.match(denied._meta["mcp/www_authenticate"][0], /scope="events app_controls"/);
   assert.equal((await call("get_app_control")).structuredContent.enabled, false);
 });
 
@@ -106,7 +107,7 @@ test("refresh preserves granted scope and cannot silently expand it", async () =
   assert.equal((await request("/oauth/token", form({ grant_type: "refresh_token", refresh_token: controlRefresh,
     client_id: client, resource, scope: "events app_controls" }))).status, 400);
   const refreshed = await (await request("/oauth/token", form({ grant_type: "refresh_token", refresh_token: controlRefresh,
-    client_id: client, resource }))).json();
+    client_id: client, resource, scope: "app_controls" }))).json();
   assert.equal(refreshed.scope, "app_controls");
   assert.equal((await call("query_events", {}, refreshed.access_token)).isError, true);
   assert.equal((await call("get_app_control", {}, refreshed.access_token)).isError, false);
