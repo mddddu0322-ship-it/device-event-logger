@@ -50,7 +50,8 @@ export function createOAuthRoutes() {
   oauth.use("*", bodyLimit({ maxSize: 16384, onError: c => c.json({ error: "invalid_request" }, 413) }));
   oauth.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store");
-    c.header("Referrer-Policy", "no-referrer");
+    // Keep the real Origin on same-origin HTML form POSTs. no-referrer makes browsers send Origin: null.
+    c.header("Referrer-Policy", "same-origin");
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     if (Number(c.req.header("content-length") ?? 0) > 16384) return c.json({ error: "invalid_request" }, 413);
@@ -90,12 +91,13 @@ export function createOAuthRoutes() {
     return c.html(`<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>授权手机使用记录</title><body><h1>授权 ChatGPT 连接手机使用记录</h1><p>授权后，ChatGPT 可以查询事件和清理记录。删除操作会要求确认。</p><p>请输入快捷指令使用的 API Key，仅用于向此服务确认身份。授权令牌有效期为一小时，可续期三十天。</p><form method="post" action="/oauth/authorize"><input type="hidden" name="request" value="${id}"><label>API Key <input type="password" name="key" autocomplete="off" required></label><button type="submit">确认授权</button></form></body></html>`);
   });
   oauth.post("/oauth/authorize", async c => {
-    if (c.req.header("origin") !== OAUTH_ISSUER) return c.json({ error: "invalid_request" }, 403);
+    if (c.req.header("origin") !== OAUTH_ISSUER) return c.json({ error: "invalid_request", error_description: "授权页面来源校验失败，请从 ChatGPT 重新连接。" }, 403);
     if (limited("login", 10)) return c.json({ error: "slow_down" }, 429);
     const b = await c.req.parseBody(), sql = c.get("sql"), id = String(b.request ?? ""), key = String(b.key ?? "");
     const csrf = getCookie(c, "__Host-oauth_csrf") ?? "";
     const pending = await sql.unsafe("SELECT * FROM oauth_requests WHERE id=$1 AND expires>now()", [hash(id)]);
-    if (!csrf || !pending.length || !equal(pending[0].csrf, hash(csrf))) return c.json({ error: "invalid_request" }, 400);
+    if (!pending.length) return c.json({ error: "invalid_request", error_description: "授权页面已过期或已提交，请从 ChatGPT 重新连接。" }, 400);
+    if (!csrf || !equal(pending[0].csrf, hash(csrf))) return c.json({ error: "invalid_request", error_description: "授权会话校验失败，请从 ChatGPT 重新连接并在同一浏览器完成授权。" }, 400);
     if (!key || !c.env.API_KEY || !equal(key, c.env.API_KEY)) return c.text("API Key 不正确，请返回重试。", 401);
     const q = decodeJSON(pending[0].data), code = token();
     // Delete and create in one SQL statement so concurrent consent cannot reuse a request.
