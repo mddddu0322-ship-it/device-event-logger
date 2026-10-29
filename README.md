@@ -85,7 +85,7 @@ npm start
 
 ## MCP 工具
 
-`/mcp` 是一个 JSON-RPC 端点，接入 MCP 客户端后有三个工具可用。
+`/mcp` 是一个 JSON-RPC 端点，接入 MCP 客户端后有五个工具可用。
 
 | 工具 | 作用 |
 |------|------|
@@ -139,7 +139,7 @@ npm start
 - MCP URL：`https://device-event-logger-4rtn.onrender.com/mcp`
 - 身份验证选择 **OAuth**。支持动态客户端注册（DCR），进阶客户端 ID/Secret 留空。
 - ChatGPT 跳转到本站授权页后，输入快捷指令使用的 API_KEY，明确同意授权。
-- 授权仅用于 MCP 的查询、列举类型和清理功能；删除有预览和确认要求。
+- `events` 权限用于 MCP 查询、列举类型和清理；删除有预览和确认要求。应用限制另需明确授权 `app_controls`。
 - `/events` 的现有密钥验证不变。OAuth 令牌不能用于该上传接口。
 - 授权码使用 PKCE S256，60 秒有效且只能使用一次；访问令牌有效期一小时，刷新令牌三十天且每次续期轮换。
 - 数据库只保存授权码和令牌的 SHA-256 摘要；Cookie 使用 Secure、HttpOnly、SameSite=Lax，并校验授权请求的来源。
@@ -152,4 +152,25 @@ npm start
 ```sh
 npm install --prefix /tmp/device-event-oauth-check --no-audit --no-fund @electric-sql/pglite
 OAUTH_TEST_MODULES=/tmp/device-event-oauth-check/node_modules node --experimental-strip-types --test test/oauth.node.test.ts
+```
+
+
+## 小红书临时限制试用版
+
+默认关闭。服务端只保存开关，手机需自行配置“打开小红书”个人自动化。
+
+- `get_app_control`：读取有效状态，需要 `app_controls` OAuth 权限。
+- `set_app_control`：开启或解除限制，需要 `app_controls`。启用时提供 `app: "小红书"`、`enabled: true`、`duration_minutes: 1..1440`，可选 `message`（最多 200 字符）。解除时传 `enabled: false`。
+- 老的 `events` 授权不会自动增加控制权限。首次使用控制工具时需重新同意所需权限；刷新令牌不会扩大权限。
+- 限制状态由 PostgreSQL 保存，重启后保留；每次读取按数据库当前时间判断到期，到期立即返回 `enabled: false`，不依赖后台定时任务。
+- 快捷指令读取 `GET /controls?app=%E5%B0%8F%E7%BA%A2%E4%B9%A6`，Authorization 沿用已有 API_KEY。按字典字段 `enabled` 判断，使用 `message` 显示通知，再打开 ChatGPT。
+- `POST /controls` 接受相同参数的 JSON，仅用于持有 API_KEY 的管理调用。GET 永不修改开关；所有状态接口禁止缓存。
+- 手机失去网络或自动化被关闭时无法保证拦截。仅在下一次打开 App 时检查，无法即时关闭已打开的 App。打开 ChatGPT 不保证返回某一指定对话。
+- 试用版仅支持小红书，不能影响其他应用。保留随时解除和最长 24 小时自动到期。
+
+本地验证（临时测试数据库，无需生产连接）：
+
+```sh
+npm install --prefix /tmp/device-event-control-check --no-audit --no-fund @electric-sql/pglite
+OAUTH_TEST_MODULES=/tmp/device-event-control-check/node_modules node --experimental-strip-types --test test/controls.node.test.ts test/oauth.node.test.ts
 ```
