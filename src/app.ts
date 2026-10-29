@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { Env, Vars } from "./types.ts";
 import { corsMiddleware } from "./middleware/cors.ts";
 import { authMiddleware } from "./middleware/auth.ts";
@@ -6,6 +7,7 @@ import { createSql, withRetry } from "./lib/db.ts";
 import { parseOffsetEnv } from "./lib/timezone.ts";
 import { events } from "./routes/events.ts";
 import { mcp } from "./routes/mcp.ts";
+import { handleUnauthenticatedMcpPost } from "./lib/mcp-protocol.ts";
 import { createOAuthRoutes, OAUTH_DDL, OAUTH_ISSUER, ACCESS_PREFIX, validOAuthToken } from "./routes/oauth.ts";
 import type postgres from "postgres";
 
@@ -69,6 +71,9 @@ export function createApp(options?: AppOptions) {
 
   app.get("/", (c) => c.json({ service: "device-event-logger", status: "running" }));
 
+  // Public MCP discovery must have a body limit before JSON parsing.
+  app.use("*", bodyLimit({ maxSize: 65536, onError: c => c.json({ error: "Payload too large" }, 413) }));
+
   // Keep shortcuts on their existing API key. OAuth tokens are limited to MCP.
   app.use("*", (c, next) => {
     if (/^\/events(\/|$)/.test(c.req.path)) return authMiddleware(c, next);
@@ -79,6 +84,7 @@ export function createApp(options?: AppOptions) {
       if (token && c.env.API_KEY && token === c.env.API_KEY) return next();
       if (bearer && token.startsWith(ACCESS_PREFIX)) return next();
       c.header("WWW-Authenticate", `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource"`);
+      if (c.req.method === "POST") return handleUnauthenticatedMcpPost(c);
       return c.json({ error: "Unauthorized" }, 401);
     }
     return next();
@@ -110,6 +116,7 @@ export function createApp(options?: AppOptions) {
       const token = (c.req.header("Authorization") ?? "").replace(/^Bearer /i, "").trim();
       if (token !== c.env.API_KEY && !await validOAuthToken(c.get("sql"), token)) {
         c.header("WWW-Authenticate", `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource", error="invalid_token"`);
+        if (c.req.method === "POST") return handleUnauthenticatedMcpPost(c);
         return c.json({ error: "Unauthorized" }, 401);
       }
     }
