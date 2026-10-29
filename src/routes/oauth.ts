@@ -10,6 +10,7 @@ export const MCP_RESOURCE = `${OAUTH_ISSUER}/mcp`;
 export const ACCESS_PREFIX = "mcp_at_";
 const token = () => randomBytes(32).toString("base64url");
 export const hash = (s: string) => createHash("sha256").update(s).digest("base64url");
+const decodeJSON = (value: any): any => typeof value === "string" ? JSON.parse(value) : value;
 const equal = (a: string, b: string) => timingSafeEqual(Buffer.from(hash(a)), Buffer.from(hash(b)));
 
 export function allowedRedirect(value: unknown): value is string {
@@ -72,7 +73,7 @@ export function createOAuthRoutes() {
     if (!b || !Array.isArray(b.redirect_uris) || !b.redirect_uris.length || b.redirect_uris.length > 5 || !b.redirect_uris.every(allowedRedirect) ||
       (b.token_endpoint_auth_method && b.token_endpoint_auth_method !== "none")) return c.json({ error: "invalid_client_metadata" }, 400);
     const id = token();
-    await c.get("sql").unsafe("INSERT INTO oauth_clients(id,redirects,expires) VALUES ($1,$2,now()+interval '1 year')", [id, JSON.stringify(b.redirect_uris)]);
+    await c.get("sql").unsafe("INSERT INTO oauth_clients(id,redirects,expires) VALUES ($1,$2::text::jsonb,now()+interval '1 year')", [id, JSON.stringify(b.redirect_uris)]);
     return c.json({ client_id: id, client_id_issued_at: Math.floor(Date.now()/1000), redirect_uris: b.redirect_uris,
       token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], scope: "events" }, 201);
   });
@@ -80,11 +81,11 @@ export function createOAuthRoutes() {
     if (limited("authorize", 30)) return c.json({ error: "slow_down" }, 429);
     const q = c.req.query(), sql = c.get("sql");
     const clients = await sql.unsafe("SELECT redirects FROM oauth_clients WHERE id=$1 AND expires>now()", [q.client_id ?? ""]);
-    if (!clients.length || !allowedRedirect(q.redirect_uri) || !clients[0].redirects.includes(q.redirect_uri) ||
+    if (!clients.length || !allowedRedirect(q.redirect_uri) || !decodeJSON(clients[0].redirects).includes(q.redirect_uri) ||
       q.response_type !== "code" || q.code_challenge_method !== "S256" || !/^[A-Za-z0-9_-]{43}$/.test(q.code_challenge ?? "") ||
       q.resource !== MCP_RESOURCE || (q.scope && q.scope !== "events")) return c.json({ error: "invalid_request" }, 400);
     const id = token(), csrf = token();
-    await sql.unsafe("INSERT INTO oauth_requests(id,csrf,data,expires) VALUES ($1,$2,$3,now()+interval '10 minutes')", [hash(id), hash(csrf), JSON.stringify(q)]);
+    await sql.unsafe("INSERT INTO oauth_requests(id,csrf,data,expires) VALUES ($1,$2,$3::text::jsonb,now()+interval '10 minutes')", [hash(id), hash(csrf), JSON.stringify(q)]);
     setCookie(c, "__Host-oauth_csrf", csrf, { httpOnly: true, secure: true, sameSite: "Lax", path: "/", maxAge: 600 });
     return c.html(`<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>授权手机使用记录</title><body><h1>授权 ChatGPT 连接手机使用记录</h1><p>授权后，ChatGPT 可以查询事件和清理记录。删除操作会要求确认。</p><p>请输入快捷指令使用的 API Key，仅用于向此服务确认身份。授权令牌有效期为一小时，可续期三十天。</p><form method="post" action="/oauth/authorize"><input type="hidden" name="request" value="${id}"><label>API Key <input type="password" name="key" autocomplete="off" required></label><button type="submit">确认授权</button></form></body></html>`);
   });
@@ -96,7 +97,7 @@ export function createOAuthRoutes() {
     const pending = await sql.unsafe("SELECT * FROM oauth_requests WHERE id=$1 AND expires>now()", [hash(id)]);
     if (!csrf || !pending.length || !equal(pending[0].csrf, hash(csrf))) return c.json({ error: "invalid_request" }, 400);
     if (!key || !c.env.API_KEY || !equal(key, c.env.API_KEY)) return c.text("API Key 不正确，请返回重试。", 401);
-    const q = pending[0].data, code = token();
+    const q = decodeJSON(pending[0].data), code = token();
     // Delete and create in one SQL statement so concurrent consent cannot reuse a request.
     const inserted = await sql.unsafe("WITH claimed AS (DELETE FROM oauth_requests WHERE id=$1 AND expires>now() RETURNING data) INSERT INTO oauth_codes(id,data,expires) SELECT $2,data,now()+interval '60 seconds' FROM claimed RETURNING id", [hash(id), hash(code)]);
     if (!inserted.length) return c.json({ error: "invalid_request" }, 400);
@@ -115,7 +116,7 @@ export function createOAuthRoutes() {
       const codeHash = hash(String(b.code ?? "")), verifier = String(b.code_verifier ?? "");
       const rows = await sql.unsafe("SELECT data FROM oauth_codes WHERE id=$1 AND expires>now()", [codeHash]);
       if (!rows.length) return c.json({ error: "invalid_grant" }, 400);
-      const q = rows[0].data;
+      const q = decodeJSON(rows[0].data);
       if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || q.client_id !== client || q.redirect_uri !== b.redirect_uri || !equal(q.code_challenge, hash(verifier))) return c.json({ error: "invalid_grant" }, 400);
       consumed = await sql.unsafe("WITH claimed AS (DELETE FROM oauth_codes WHERE id=$1 AND expires>now() RETURNING id) INSERT INTO oauth_tokens(id,client,kind,expires) SELECT $2,$3,'access',now()+interval '1 hour' FROM claimed UNION ALL SELECT $4,$3,'refresh',now()+interval '30 days' FROM claimed RETURNING id", [codeHash, hash(access), client, hash(refresh)]);
     } else if (b.grant_type === "refresh_token") {
