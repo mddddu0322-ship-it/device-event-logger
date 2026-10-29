@@ -56,6 +56,10 @@ export function createOAuthRoutes() {
     c.header("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     if (Number(c.req.header("content-length") ?? 0) > 16384) return c.json({ error: "invalid_request" }, 413);
     await next();
+    // Safari can guess a legacy Chinese encoding for JSON unless UTF-8 is explicit.
+    if (c.res.headers.get("Content-Type")?.startsWith("application/json")) {
+      c.header("Content-Type", "application/json; charset=UTF-8");
+    }
   });
   for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
     oauth.get(path, c => c.json({ resource: MCP_RESOURCE, authorization_servers: [OAUTH_ISSUER], scopes_supported: ["events"] }));
@@ -86,8 +90,8 @@ export function createOAuthRoutes() {
       q.response_type !== "code" || q.code_challenge_method !== "S256" || !/^[A-Za-z0-9_-]{43}$/.test(q.code_challenge ?? "") ||
       q.resource !== MCP_RESOURCE || (q.scope && q.scope !== "events")) return c.json({ error: "invalid_request" }, 400);
     const id = token(), csrf = token();
-    await sql.unsafe("INSERT INTO oauth_requests(id,csrf,data,expires) VALUES ($1,$2,$3::text::jsonb,now()+interval '10 minutes')", [hash(id), hash(csrf), JSON.stringify(q)]);
-    setCookie(c, "__Host-oauth_csrf", csrf, { httpOnly: true, secure: true, sameSite: "Lax", path: "/", maxAge: 600 });
+    await sql.unsafe("INSERT INTO oauth_requests(id,csrf,data,expires) VALUES ($1,$2,$3::text::jsonb,now()+interval '30 minutes')", [hash(id), hash(csrf), JSON.stringify(q)]);
+    setCookie(c, "__Host-oauth_csrf", csrf, { httpOnly: true, secure: true, sameSite: "Lax", path: "/", maxAge: 1800 });
     return c.html(`<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>授权手机使用记录</title><body><h1>授权 ChatGPT 连接手机使用记录</h1><p>授权后，ChatGPT 可以查询事件和清理记录。删除操作会要求确认。</p><p>请输入快捷指令使用的 API Key，仅用于向此服务确认身份。授权令牌有效期为一小时，可续期三十天。</p><form method="post" action="/oauth/authorize"><input type="hidden" name="request" value="${id}"><label>API Key <input type="password" name="key" autocomplete="off" required></label><button type="submit">确认授权</button></form></body></html>`);
   });
   oauth.post("/oauth/authorize", async c => {
