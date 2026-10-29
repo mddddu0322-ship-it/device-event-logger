@@ -375,12 +375,14 @@ async function handleMcpRequest(message: JsonRpcMessage, sql: postgres.Sql, offs
     case "tools/call": {
       const name = typeof params.name === "string" ? params.name : "";
       const requiredScope = CONTROL_TOOLS.some(tool => tool.name === name) ? CONTROL_SCOPE : "events";
+      // A scope upgrade must preserve permissions already granted to this connection.
+      const requestedScopes = [...new Set([...scopes, requiredScope])].join(" ");
       // Discovery is public, but no tool can reach event queries or deletion before authentication.
       if (!authenticated || !scopes.includes(requiredScope)) {
         return jsonRpcResult(id, {
           content: [{ type: "text", text: requiredScope === CONTROL_SCOPE ? "Authorize the app_controls permission to manage temporary app restrictions." : "Connect your device event logger account to access records." }],
           _meta: { "mcp/www_authenticate": [
-            `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource", scope="${requiredScope}", error="${authenticated ? "insufficient_scope" : "invalid_token"}", error_description="Authorize the required device service permission"`,
+            `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource", scope="${requestedScopes}", error="${authenticated ? "insufficient_scope" : "invalid_token"}", error_description="Authorize the required device service permission"`,
           ] },
           isError: true,
         });
