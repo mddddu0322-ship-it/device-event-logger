@@ -33,6 +33,8 @@ test('registration rejects attacker redirects and creates public ChatGPT client'
   }
   const res=await request('/oauth/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({redirect_uris:[redirect],token_endpoint_auth_method:'none'})});
   assert.equal(res.status,201); client=(await res.json()).client_id;
+  // postgres.js can return legacy JSON strings; tolerate both representations.
+  await db.query('UPDATE oauth_clients SET redirects=to_jsonb(redirects::text)');
 });
 const authorize=()=>'/oauth/authorize?'+new URLSearchParams({client_id:client,redirect_uri:redirect,response_type:'code',resource,scope:'events',code_challenge_method:'S256',code_challenge:hash(verifier),state:'state-check'});
 test('authorization enforces redirect/resource, CSRF, owner key and one-time consent',async()=>{
@@ -40,6 +42,7 @@ test('authorization enforces redirect/resource, CSRF, owner key and one-time con
   const res=await request(authorize()); assert.equal(res.status,200);
   const html=await res.text(); assert.ok(!html.includes(env.API_KEY));
   pending=html.match(/name="request" value="([^"]+)"/)![1];
+  await db.query('UPDATE oauth_requests SET data=to_jsonb(data::text)');
   cookie=res.headers.get('set-cookie')!.split(';')[0];
   assert.match(res.headers.get('set-cookie')!,/HttpOnly/); assert.match(res.headers.get('set-cookie')!,/Secure/);
   assert.equal((await request('/oauth/authorize',form({request:pending,key:env.API_KEY},{origin:base}))).status,400);
