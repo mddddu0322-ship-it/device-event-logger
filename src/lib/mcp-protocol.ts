@@ -31,6 +31,7 @@ const MCP_SERVER_INFO = {
 };
 
 const QUERY_EVENTS_TOOL = {
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   name: "query_events",
   title: "Query Events",
   description: "Query event records by time range, type, and value.",
@@ -103,6 +104,7 @@ const QUERY_EVENTS_TOOL = {
 };
 
 const LIST_EVENT_TYPES_TOOL = {
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   name: "list_event_types",
   title: "List Event Types",
   description:
@@ -136,6 +138,7 @@ const LIST_EVENT_TYPES_TOOL = {
 };
 
 const DELETE_EVENTS_TOOL = {
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   name: "delete_events",
   title: "Delete Events",
   description:
