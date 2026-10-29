@@ -24,7 +24,7 @@ test('OAuth metadata advertises canonical issuer, resource, PKCE and DCR',async(
   assert.equal(meta.token_endpoint_auth_methods_supported[0],'none');
   const protectedMeta=await (await request('/.well-known/oauth-protected-resource')).json();
   assert.equal(protectedMeta.resource,resource);
-  const blocked=await request('/mcp',{method:'POST'}); assert.equal(blocked.status,401);
+  const blocked=await request('/mcp',{method:'GET'}); assert.equal(blocked.status,401);
   assert.match(blocked.headers.get('www-authenticate')!,/resource_metadata=/);
 });
 test('registration rejects attacker redirects and creates public ChatGPT client',async()=>{
@@ -65,7 +65,8 @@ test('OAuth permits MCP reads and cannot authenticate Shortcut writes',async()=>
   const mcp=await request('/mcp',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+access},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'query_events',arguments:{hours:24}}})});
   assert.equal(mcp.status,200); assert.equal((await mcp.json()).result.isError,false);
   assert.equal((await request('/events',form({},{authorization:'Bearer '+access}))).status,401);
-  assert.equal((await request('/mcp',{method:'POST',headers:{authorization:'Bearer mcp_at_invalid'}})).status,401);
+  const rejected=await request('/mcp',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer mcp_at_invalid'},body:JSON.stringify({jsonrpc:'2.0',id:10,method:'tools/call',params:{name:'query_events',arguments:{hours:24}}})});
+  const challenge=await rejected.json();assert.equal(challenge.result.isError,true);assert.ok(challenge.result._meta['mcp/www_authenticate']);
   assert.equal((await request('/events?hours=1',{headers:{authorization:env.API_KEY}})).status,200);
 });
 test('refresh rotates tokens, rejects replay; expired and revoked access denied',async()=>{
@@ -74,8 +75,8 @@ test('refresh rotates tokens, rejects replay; expired and revoked access denied'
   assert.ok(b.access_token);assert.notEqual(b.refresh_token,refresh);
   assert.equal((await request('/oauth/token',form({grant_type:'refresh_token',refresh_token:refresh,client_id:client,resource}))).status,400);
   await db.query("UPDATE oauth_tokens SET expires=now()-interval '1 second' WHERE id=$1",[hash(access)]);
-  assert.equal((await request('/mcp',{method:'POST',headers:{authorization:'Bearer '+access}})).status,401);
+  assert.equal((await request('/mcp',{method:'GET',headers:{authorization:'Bearer '+access}})).status,401);
   assert.equal((await request('/oauth/revoke',form({token:b.access_token,client_id:client}))).status,200);
-  assert.equal((await request('/mcp',{method:'POST',headers:{authorization:'Bearer '+b.access_token}})).status,401);
+  assert.equal((await request('/mcp',{method:'GET',headers:{authorization:'Bearer '+b.access_token}})).status,401);
   await db.close();
 });

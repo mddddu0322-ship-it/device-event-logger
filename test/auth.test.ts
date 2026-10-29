@@ -66,8 +66,11 @@ Deno.test("MCP 未授权请求不能触发数据库连接或删除", async () =>
         params: { name: "delete_events", arguments: { type: "app", confirm: true } },
       }, { Authorization: token });
       const response = await app.fetch(new Request(`http://localhost${path}`, request), TEST_ENV);
-      await response.text();
-      assertEquals(response.status, 401);
+      const body = await response.json();
+      assertEquals(response.status, 200);
+      assertEquals(body.result.isError, true);
+      assertEquals(body.result._meta["mcp/www_authenticate"].length, 1);
+      assertEquals(body.result.structuredContent, undefined);
     }
   }
   assertEquals(connections, 0);
@@ -83,4 +86,26 @@ Deno.test("MCP 正确密钥允许握手", async () => {
   }), TEST_ENV);
   assertEquals(response.status, 200);
   assertEquals((await response.json()).result.serverInfo.name, "device-event-logger");
+});
+
+
+Deno.test("未登录可以发现工具及 OAuth 要求，但查询仍返回授权提示", async () => {
+  const app = createApp({ createSql: () => { throw new Error("Must not access data"); } });
+  const list = await app.fetch(mcpRequest({jsonrpc:"2.0",id:1,method:"tools/list"},{Authorization:""}), TEST_ENV);
+  assertEquals(list.status,200);
+  for (const tool of (await list.json()).result.tools) {
+    assertEquals(tool.securitySchemes,[{type:"oauth2",scopes:["events"]}]);
+    assertEquals(tool._meta.securitySchemes,tool.securitySchemes);
+  }
+  const initialize = await app.fetch(mcpRequest({jsonrpc:"2.0",id:2,method:"initialize",params:{}},{Authorization:""}), TEST_ENV);
+  assertEquals(initialize.status,200);
+  const query = await app.fetch(mcpRequest({jsonrpc:"2.0",id:3,method:"tools/call",params:{name:"query_events",arguments:{hours:24}}},{Authorization:""}), TEST_ENV);
+  assertEquals((await query.json()).result.isError,true);
+});
+
+
+Deno.test("未授权 MCP 的请求体过大时拒绝解析", async () => {
+  const app=createApp({createSql:()=>{throw new Error("Must not access data");}});
+  const response=await app.fetch(mcpRequest({jsonrpc:"2.0",id:1,method:"tools/call",params:{arguments:{value:"x".repeat(70000)}}},{Authorization:""}),TEST_ENV);
+  assertEquals(response.status,413);
 });
