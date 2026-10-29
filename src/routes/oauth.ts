@@ -53,7 +53,7 @@ export function createOAuthRoutes() {
     // Keep the real Origin on same-origin HTML form POSTs. no-referrer makes browsers send Origin: null.
     c.header("Referrer-Policy", "same-origin");
     c.header("X-Content-Type-Options", "nosniff");
-    c.header("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    c.header("Content-Security-Policy", "default-src 'none'; form-action 'self' https://chatgpt.com https://chat.openai.com; frame-ancestors 'none'; base-uri 'none'");
     if (Number(c.req.header("content-length") ?? 0) > 16384) return c.json({ error: "invalid_request" }, 413);
     await next();
     // Safari can guess a legacy Chinese encoding for JSON unless UTF-8 is explicit.
@@ -110,26 +110,28 @@ export function createOAuthRoutes() {
     const target = new URL(q.redirect_uri);
     target.searchParams.set("code", code); target.searchParams.set("iss", OAUTH_ISSUER);
     if (q.state) target.searchParams.set("state", q.state);
+    console.info("OAuth consent approved; returning to ChatGPT");
     return c.redirect(target.toString(), 303);
   });
   oauth.post("/oauth/token", async c => {
     if (limited("token", 60)) return c.json({ error: "slow_down" }, 429);
     const b = await c.req.parseBody(), sql = c.get("sql"), client = String(b.client_id ?? "");
-    if (b.resource !== MCP_RESOURCE) return c.json({ error: "invalid_target" }, 400);
+    if (b.resource !== MCP_RESOURCE) { console.warn("OAuth token rejected: resource mismatch"); return c.json({ error: "invalid_target" }, 400); }
     const access = ACCESS_PREFIX + token(), refresh = "mcp_rt_" + token();
     let consumed: unknown[];
     if (b.grant_type === "authorization_code") {
       const codeHash = hash(String(b.code ?? "")), verifier = String(b.code_verifier ?? "");
       const rows = await sql.unsafe("SELECT data FROM oauth_codes WHERE id=$1 AND expires>now()", [codeHash]);
-      if (!rows.length) return c.json({ error: "invalid_grant" }, 400);
+      if (!rows.length) { console.warn("OAuth token rejected: authorization code missing or expired"); return c.json({ error: "invalid_grant" }, 400); }
       const q = decodeJSON(rows[0].data);
       if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || q.client_id !== client || q.redirect_uri !== b.redirect_uri || !equal(q.code_challenge, hash(verifier))) return c.json({ error: "invalid_grant" }, 400);
       consumed = await sql.unsafe("WITH claimed AS (DELETE FROM oauth_codes WHERE id=$1 AND expires>now() RETURNING id) INSERT INTO oauth_tokens(id,client,kind,expires) SELECT $2,$3,'access',now()+interval '1 hour' FROM claimed UNION ALL SELECT $4,$3,'refresh',now()+interval '30 days' FROM claimed RETURNING id", [codeHash, hash(access), client, hash(refresh)]);
     } else if (b.grant_type === "refresh_token") {
       consumed = await sql.unsafe("WITH claimed AS (DELETE FROM oauth_tokens WHERE id=$1 AND client=$2 AND kind='refresh' AND expires>now() RETURNING id) INSERT INTO oauth_tokens(id,client,kind,expires) SELECT $3,$2,'access',now()+interval '1 hour' FROM claimed UNION ALL SELECT $4,$2,'refresh',now()+interval '30 days' FROM claimed RETURNING id", [hash(String(b.refresh_token ?? "")), client, hash(access), hash(refresh)]);
     } else return c.json({ error: "unsupported_grant_type" }, 400);
-    if (!consumed.length) return c.json({ error: "invalid_grant" }, 400);
+    if (!consumed.length) { console.warn("OAuth token rejected: grant already consumed or expired"); return c.json({ error: "invalid_grant" }, 400); }
     for (const table of ["oauth_requests", "oauth_codes", "oauth_tokens", "oauth_clients"]) await sql.unsafe(`DELETE FROM ${table} WHERE expires<now()`);
+    console.info("OAuth access token issued");
     return c.json({ access_token: access, token_type: "Bearer", expires_in: 3600, refresh_token: refresh, scope: "events" });
   });
   oauth.post("/oauth/revoke", async c => {
