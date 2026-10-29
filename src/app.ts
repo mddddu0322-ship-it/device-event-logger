@@ -6,6 +6,7 @@ import { createSql, withRetry } from "./lib/db.ts";
 import { parseOffsetEnv } from "./lib/timezone.ts";
 import { events } from "./routes/events.ts";
 import { mcp } from "./routes/mcp.ts";
+import { createOAuthRoutes, OAUTH_DDL, OAUTH_ISSUER, ACCESS_PREFIX, validOAuthToken } from "./routes/oauth.ts";
 import type postgres from "postgres";
 
 const SCHEMA_DDL = `
@@ -41,7 +42,7 @@ export function createApp(options?: AppOptions) {
    */
   async function ensureSchema(sql: postgres.Sql): Promise<void> {
     if (schemaReady) return;
-    schemaPromise ??= withRetry(() => sql.unsafe(SCHEMA_DDL)).then(() => {
+    schemaPromise ??= withRetry(() => sql.unsafe(SCHEMA_DDL + OAUTH_DDL)).then(() => {
       schemaReady = true;
     });
     try {
@@ -68,12 +69,20 @@ export function createApp(options?: AppOptions) {
 
   app.get("/", (c) => c.json({ service: "device-event-logger", status: "running" }));
 
-  // Reject unauthenticated requests before opening a database connection.
-  app.use("*", (c, next) =>
-    /^\/(events|mcp)(\/|$)/.test(c.req.path)
-      ? authMiddleware(c, next)
-      : next()
-  );
+  // Keep shortcuts on their existing API key. OAuth tokens are limited to MCP.
+  app.use("*", (c, next) => {
+    if (/^\/events(\/|$)/.test(c.req.path)) return authMiddleware(c, next);
+    if (/^\/mcp(\/|$)/.test(c.req.path)) {
+      const raw = (c.req.header("Authorization") ?? "").trim();
+      const bearer = /^Bearer /i.test(raw);
+      const token = bearer ? raw.slice(7).trim() : raw;
+      if (token && c.env.API_KEY && token === c.env.API_KEY) return next();
+      if (bearer && token.startsWith(ACCESS_PREFIX)) return next();
+      c.header("WWW-Authenticate", `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource"`);
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    return next();
+  });
 
   // DB + timezone injection
   app.use("*", async (c, next) => {
@@ -96,6 +105,17 @@ export function createApp(options?: AppOptions) {
     return c.json({ status: "ok" });
   });
 
+  app.use("*", async (c, next) => {
+    if (/^\/mcp(\/|$)/.test(c.req.path)) {
+      const token = (c.req.header("Authorization") ?? "").replace(/^Bearer /i, "").trim();
+      if (token !== c.env.API_KEY && !await validOAuthToken(c.get("sql"), token)) {
+        c.header("WWW-Authenticate", `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource", error="invalid_token"`);
+        return c.json({ error: "Unauthorized" }, 401);
+      }
+    }
+    await next();
+  });
+  app.route("/", createOAuthRoutes());
   // Routes
   app.route("/events", events);
   app.route("/mcp", mcp);
