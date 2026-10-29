@@ -2,8 +2,10 @@ services:
   - type: web
     name: device-event-logger
     runtime: node
-    buildCommand: npm install
+    plan: free
+    buildCommand: npm ci --omit=dev --ignore-scripts
     startCommand: npm start
+    healthCheckPath: /healthz
     envVars:
       - key: API_KEY
         generateValue: true
@@ -14,7 +16,7 @@ services:
       - key: TZ_OFFSET
         value: "480"
       - key: NODE_VERSION
-        value: "22"
+        value: "24"
 
 databases:
   - name: event-logger-db

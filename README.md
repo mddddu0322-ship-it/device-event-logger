@@ -79,7 +79,7 @@ npm start
 | 变量 | 说明 | 必填 |
 |------|------|------|
 | `DATABASE_URL` | PostgreSQL 连接字符串 | 是 |
-| `API_KEY` | `/events` 端点的认证密钥（`Authorization` 头写 `Bearer <key>` 或直接写 `<key>` 都可以） | 是 |
+| `API_KEY` | `/events` 和 `/mcp` 端点的认证密钥（`Authorization` 头写 `Bearer <key>` 或直接写 `<key>` 都可以） | 是 |
 | `TZ_OFFSET` | 与 UTC 的时区偏移（分钟，默认 `480`，即 +08:00；+05:30 这类非整点时区写 `330`） | 否 |
 | `PORT` | 服务端口（默认 `8000`，仅 Node/Deno） | 否 |
 
@@ -117,14 +117,16 @@ npm start
 
 确认条数没问题后，同样的条件加上 `confirm: true` 再调一次才会真删。
 
-> `/mcp` 端点不校验 API_KEY，拿到 URL 的人就能调用包括 `delete_events` 在内的所有工具。部署时注意别把地址公开出去。
+> 此部署版本的 `/mcp` 端点要求 API_KEY。MCP 客户端需要支持设置 `Authorization` 请求头。仅支持 OAuth 的客户端还需要额外配置 OAuth，不能直接使用此密钥方式。
 
 ## HTTP 端点
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| `GET` | `/` | 服务运行状态，不读取事件 |
+| `GET` | `/healthz` | 数据库就绪检查，用于 Railway 部署健康检查 |
 | `POST` | `/events` | 写入一条事件，body 为 `{ "type": "app.open", "value": "Safari" }` |
 | `GET` | `/events` | 查询记录，支持 `hours`/`since`/`until`/`type`/`value`/`limit`/`offset` |
 | `DELETE` | `/events?days=N` | 删除 N 天前的记录 |
 
-`/events` 需要在 `Authorization` 头里带上 API_KEY，写 `Bearer <key>` 或直接写 `<key>` 都可以。
+`/events` 和 `/mcp` 需要在 `Authorization` 头里带上 API_KEY，写 `Bearer <key>` 或直接写 `<key>` 都可以。

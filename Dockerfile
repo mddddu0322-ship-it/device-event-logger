@@ -1,8 +1,9 @@
-FROM denoland/deno:latest
+FROM node:24-bookworm-slim
 EXPOSE 8000
 WORKDIR /app
-COPY deno.json .
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
 COPY src/ src/
-COPY entry/deno.ts entry/
-RUN deno cache entry/deno.ts
-CMD ["deno", "task", "start"]
+COPY entry/node.ts entry/
+USER node
+CMD ["npm", "start"]
