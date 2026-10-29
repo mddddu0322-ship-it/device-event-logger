@@ -11,6 +11,7 @@ import {
   queryEvents,
 } from "./queries.ts";
 import { withRetry } from "./db.ts";
+import { OAUTH_ISSUER } from "../routes/oauth.ts";
 
 const DEFAULT_MCP_PROTOCOL_VERSION = "2025-03-26";
 // 新版本排在最前，客户端报了不认识的版本时用它回落
@@ -26,11 +27,15 @@ const SUPPORTED_MCP_PROTOCOL_VERSIONS = new Set(SUPPORTED_MCP_PROTOCOL_VERSION_L
 const MCP_SERVER_INFO = {
   name: "device-event-logger",
   title: "User Device Event Logger",
-  version: "1.1.0",
+  version: "1.2.0",
   description: "Query and prune user device event records stored in a database.",
 };
 
+const MCP_SECURITY_SCHEMES = [{ type: "oauth2", scopes: ["events"] }];
+
 const QUERY_EVENTS_TOOL = {
+  securitySchemes: MCP_SECURITY_SCHEMES,
+  _meta: { securitySchemes: MCP_SECURITY_SCHEMES },
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   name: "query_events",
   title: "Query Events",
@@ -104,6 +109,8 @@ const QUERY_EVENTS_TOOL = {
 };
 
 const LIST_EVENT_TYPES_TOOL = {
+  securitySchemes: MCP_SECURITY_SCHEMES,
+  _meta: { securitySchemes: MCP_SECURITY_SCHEMES },
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   name: "list_event_types",
   title: "List Event Types",
@@ -138,6 +145,8 @@ const LIST_EVENT_TYPES_TOOL = {
 };
 
 const DELETE_EVENTS_TOOL = {
+  securitySchemes: MCP_SECURITY_SCHEMES,
+  _meta: { securitySchemes: MCP_SECURITY_SCHEMES },
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   name: "delete_events",
   title: "Delete Events",
@@ -327,7 +336,7 @@ async function callDeleteEventsTool(
   }
 }
 
-async function handleMcpRequest(message: JsonRpcMessage, sql: postgres.Sql, offsetMinutes: number) {
+async function handleMcpRequest(message: JsonRpcMessage, sql: postgres.Sql, offsetMinutes: number, authenticated: boolean) {
   const id = (message.id ?? null) as JsonRpcId;
   const method = typeof message.method === "string" ? message.method : "";
   const params = (message.params && typeof message.params === "object")
@@ -362,6 +371,16 @@ async function handleMcpRequest(message: JsonRpcMessage, sql: postgres.Sql, offs
         tools: [QUERY_EVENTS_TOOL, LIST_EVENT_TYPES_TOOL, DELETE_EVENTS_TOOL],
       });
     case "tools/call": {
+      // Discovery is public, but no tool can reach event queries or deletion before authentication.
+      if (!authenticated) {
+        return jsonRpcResult(id, {
+          content: [{ type: "text", text: "Connect your device event logger account to access records." }],
+          _meta: { "mcp/www_authenticate": [
+            `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource", scope="events", error="invalid_token", error_description="Connect your device event logger account"`,
+          ] },
+          isError: true,
+        });
+      }
       const name = typeof params.name === "string" ? params.name : "";
       const args = (params.arguments && typeof params.arguments === "object")
         ? params.arguments as Record<string, unknown>
@@ -382,7 +401,7 @@ async function handleMcpRequest(message: JsonRpcMessage, sql: postgres.Sql, offs
   }
 }
 
-export async function handleMcpPost(c: Context<{ Bindings: Env; Variables: Vars }>): Promise<Response> {
+async function handleMcpPostInternal(c: Context<{ Bindings: Env; Variables: Vars }>, authenticated: boolean): Promise<Response> {
   const sql = c.var.sql;
   const offsetMinutes = c.var.offsetMinutes;
 
@@ -420,7 +439,7 @@ export async function handleMcpPost(c: Context<{ Bindings: Env; Variables: Vars 
         responses.push(jsonRpcError(null, -32600, "Invalid Request"));
         continue;
       }
-      responses.push(await handleMcpRequest(message, sql, offsetMinutes));
+      responses.push(await handleMcpRequest(message, sql, offsetMinutes, authenticated));
     }
     if (!responses.length) {
       return c.body(null, 202);
@@ -442,10 +461,20 @@ export async function handleMcpPost(c: Context<{ Bindings: Env; Variables: Vars 
     c.header("MCP-Protocol-Version", protocolVersion);
     return c.json(jsonRpcError(null, -32600, "Invalid Request"), 400);
   }
-  const response = await handleMcpRequest(message, sql, offsetMinutes);
+  const response = await handleMcpRequest(message, sql, offsetMinutes, authenticated);
   if (response == null) {
     return c.body(null, 202);
   }
   c.header("MCP-Protocol-Version", protocolVersion);
   return c.json(response);
+}
+
+
+export function handleMcpPost(c: Context<{ Bindings: Env; Variables: Vars }>): Promise<Response> {
+  return handleMcpPostInternal(c, true);
+}
+
+/** Public protocol metadata and OAuth challenges only. Never accesses the database. */
+export function handleUnauthenticatedMcpPost(c: Context<{ Bindings: Env; Variables: Vars }>): Promise<Response> {
+  return handleMcpPostInternal(c, false);
 }
