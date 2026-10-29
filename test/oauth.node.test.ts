@@ -40,6 +40,7 @@ const authorize=()=>'/oauth/authorize?'+new URLSearchParams({client_id:client,re
 test('authorization enforces redirect/resource, CSRF, owner key and one-time consent',async()=>{
   assert.equal((await request(authorize().replace(encodeURIComponent(resource),encodeURIComponent('https://evil.test')))).status,400);
   const res=await request(authorize()); assert.equal(res.status,200);
+  assert.equal(res.headers.get('referrer-policy'),'same-origin');
   const html=await res.text(); assert.ok(!html.includes(env.API_KEY));
   pending=html.match(/name="request" value="([^"]+)"/)![1];
   await db.query('UPDATE oauth_requests SET data=to_jsonb(data::text)');
