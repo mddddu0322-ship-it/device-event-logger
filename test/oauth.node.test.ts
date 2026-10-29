@@ -41,6 +41,10 @@ test('authorization enforces redirect/resource, CSRF, owner key and one-time con
   assert.equal((await request(authorize().replace(encodeURIComponent(resource),encodeURIComponent('https://evil.test')))).status,400);
   const res=await request(authorize()); assert.equal(res.status,200);
   assert.equal(res.headers.get('referrer-policy'),'same-origin');
+  // Browsers may apply form-action to the entire POST redirect chain.
+  const csp=res.headers.get('content-security-policy')!;
+  assert.match(csp,/form-action 'self' https:\/\/chatgpt\.com https:\/\/chat\.openai\.com;/);
+  assert.match(csp,/frame-ancestors 'none'/);
   const html=await res.text(); assert.ok(!html.includes(env.API_KEY));
   pending=html.match(/name="request" value="([^"]+)"/)![1];
   await db.query('UPDATE oauth_requests SET data=to_jsonb(data::text)');
@@ -53,7 +57,9 @@ test('authorization enforces redirect/resource, CSRF, owner key and one-time con
   assert.match((await badOrigin.json()).error_description,/来源校验失败/);
   assert.equal((await request('/oauth/authorize',form({request:pending,key:'wrong'},{cookie,origin:base}))).status,401);
   const ok=await request('/oauth/authorize',form({request:pending,key:env.API_KEY},{cookie,origin:base}));
-  assert.equal(ok.status,303);const target=new URL(ok.headers.get('location')!);
+  assert.equal(ok.status,303);
+  assert.match(ok.headers.get('content-security-policy')!,/https:\/\/chatgpt\.com/);
+  const target=new URL(ok.headers.get('location')!);
   assert.equal(target.searchParams.get('state'),'state-check');assert.equal(target.searchParams.get('iss'),base);code=target.searchParams.get('code')!;
   assert.equal((await request('/oauth/authorize',form({request:pending,key:env.API_KEY},{cookie,origin:base}))).status,400);
 });
