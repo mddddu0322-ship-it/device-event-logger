@@ -134,7 +134,12 @@ export function createOAuthRoutes() {
       if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || q.client_id !== client || q.redirect_uri !== b.redirect_uri || !equal(q.code_challenge, hash(verifier))) return c.json({ error: "invalid_grant" }, 400);
       consumed = await sql.unsafe("WITH claimed AS (DELETE FROM oauth_codes WHERE id=$1 AND expires>now() RETURNING id) INSERT INTO oauth_tokens(id,client,kind,expires,scope) SELECT $2,$3,'access',now()+interval '1 hour',$5 FROM claimed UNION ALL SELECT $4,$3,'refresh',now()+interval '30 days',$5 FROM claimed RETURNING id,scope", [codeHash, hash(access), client, hash(refresh), q.scope || "events"]);
     } else if (b.grant_type === "refresh_token") {
-      if (b.scope) return c.json({ error: "invalid_scope" }, 400);
+      if (b.scope) {
+        const current = await sql.unsafe("SELECT scope FROM oauth_tokens WHERE id=$1 AND client=$2 AND kind='refresh' AND expires>now()", [hash(String(b.refresh_token ?? "")), client]);
+        const requested = [...new Set(String(b.scope).split(/\s+/).filter(Boolean))].sort().join(" ");
+        const granted = current.length ? String(current[0].scope).split(/\s+/).sort().join(" ") : "";
+        if (!granted || requested !== granted) return c.json({ error: "invalid_scope" }, 400);
+      }
       consumed = await sql.unsafe("WITH claimed AS (DELETE FROM oauth_tokens WHERE id=$1 AND client=$2 AND kind='refresh' AND expires>now() RETURNING scope) INSERT INTO oauth_tokens(id,client,kind,expires,scope) SELECT $3,$2,'access',now()+interval '1 hour',scope FROM claimed UNION ALL SELECT $4,$2,'refresh',now()+interval '30 days',scope FROM claimed RETURNING id,scope", [hash(String(b.refresh_token ?? "")), client, hash(access), hash(refresh)]);
     } else return c.json({ error: "unsupported_grant_type" }, 400);
     if (!consumed.length) { console.warn("OAuth token rejected: grant already consumed or expired"); return c.json({ error: "invalid_grant" }, 400); }
