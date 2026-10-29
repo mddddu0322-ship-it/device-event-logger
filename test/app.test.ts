@@ -4,6 +4,26 @@ import { createFakeSql, mcpRequest, TEST_ENV } from "./helpers.ts";
 
 const TOOLS_LIST = { jsonrpc: "2.0", id: 1, method: "tools/list" };
 
+Deno.test("首页可访问且不会连接数据库", async () => {
+  const app = createApp({ createSql: () => { throw new Error("Must not connect"); } });
+  const response = await app.fetch(new Request("http://localhost/"), TEST_ENV);
+  assertEquals(response.status, 200);
+  assertEquals((await response.json()).service, "device-event-logger");
+});
+
+Deno.test("健康检查验证数据库可用，故障时不会报健康", async () => {
+  for (const available of [true, false]) {
+    const { sql } = createFakeSql((query) => {
+      if (query === "SELECT 1" && !available) return Promise.reject(new Error("Database unavailable"));
+      return Promise.resolve([]);
+    });
+    const app = createApp({ createSql: () => sql });
+    const response = await app.fetch(new Request("http://localhost/healthz"), TEST_ENV);
+    await response.text();
+    assertEquals(response.status, available ? 200 : 500);
+  }
+});
+
 Deno.test("建表失败后，下一个请求会重新建表", async () => {
   let attempts = 0;
   const { sql } = createFakeSql((query) => {

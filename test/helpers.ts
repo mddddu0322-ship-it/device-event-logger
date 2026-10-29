@@ -23,7 +23,7 @@ export function createFakeSql(handler?: FakeSqlHandler) {
 export function mcpRequest(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request("http://localhost/mcp", {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TEST_ENV.API_KEY}`, ...headers },
     body: JSON.stringify(body),
   });
 }
