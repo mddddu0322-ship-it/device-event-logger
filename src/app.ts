@@ -8,7 +8,8 @@ import { parseOffsetEnv } from "./lib/timezone.ts";
 import { events } from "./routes/events.ts";
 import { mcp } from "./routes/mcp.ts";
 import { handleUnauthenticatedMcpPost } from "./lib/mcp-protocol.ts";
-import { createOAuthRoutes, OAUTH_DDL, OAUTH_ISSUER, ACCESS_PREFIX, validOAuthToken } from "./routes/oauth.ts";
+import { createOAuthRoutes, OAUTH_DDL, OAUTH_ISSUER, ACCESS_PREFIX, oauthTokenScopes } from "./routes/oauth.ts";
+import { controls, CONTROL_DDL } from "./routes/controls.ts";
 import type postgres from "postgres";
 
 const SCHEMA_DDL = `
@@ -44,7 +45,7 @@ export function createApp(options?: AppOptions) {
    */
   async function ensureSchema(sql: postgres.Sql): Promise<void> {
     if (schemaReady) return;
-    schemaPromise ??= withRetry(() => sql.unsafe(SCHEMA_DDL + OAUTH_DDL)).then(() => {
+    schemaPromise ??= withRetry(() => sql.unsafe(SCHEMA_DDL + OAUTH_DDL + CONTROL_DDL)).then(() => {
       schemaReady = true;
     });
     try {
@@ -76,7 +77,7 @@ export function createApp(options?: AppOptions) {
 
   // Keep shortcuts on their existing API key. OAuth tokens are limited to MCP.
   app.use("*", (c, next) => {
-    if (/^\/events(\/|$)/.test(c.req.path)) return authMiddleware(c, next);
+    if (/^\/(events|controls)(\/|$)/.test(c.req.path)) return authMiddleware(c, next);
     if (/^\/mcp(\/|$)/.test(c.req.path)) {
       const raw = (c.req.header("Authorization") ?? "").trim();
       const bearer = /^Bearer /i.test(raw);
@@ -114,17 +115,20 @@ export function createApp(options?: AppOptions) {
   app.use("*", async (c, next) => {
     if (/^\/mcp(\/|$)/.test(c.req.path)) {
       const token = (c.req.header("Authorization") ?? "").replace(/^Bearer /i, "").trim();
-      if (token !== c.env.API_KEY && !await validOAuthToken(c.get("sql"), token)) {
+      const scopes = token === c.env.API_KEY ? ["events", "app_controls"] : await oauthTokenScopes(c.get("sql"), token);
+      if (!scopes) {
         c.header("WWW-Authenticate", `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource", error="invalid_token"`);
         if (c.req.method === "POST") return handleUnauthenticatedMcpPost(c);
         return c.json({ error: "Unauthorized" }, 401);
       }
+      c.set("oauthScopes", scopes);
     }
     await next();
   });
   app.route("/", createOAuthRoutes());
   // Routes
   app.route("/events", events);
+  app.route("/controls", controls);
   app.route("/mcp", mcp);
 
   return app;

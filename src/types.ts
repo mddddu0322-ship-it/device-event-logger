@@ -9,6 +9,7 @@ export type Env = {
 export type Vars = {
   sql: postgres.Sql;
   offsetMinutes: number;
+  oauthScopes: string[];
 };
 
 export type EventRecord = {
