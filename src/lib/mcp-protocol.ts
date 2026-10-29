@@ -12,6 +12,7 @@ import {
 } from "./queries.ts";
 import { withRetry } from "./db.ts";
 import { OAUTH_ISSUER } from "../routes/oauth.ts";
+import { CONTROL_TOOLS, CONTROL_SCOPE, callAppControlTool } from "../routes/controls.ts";
 
 const DEFAULT_MCP_PROTOCOL_VERSION = "2025-03-26";
 // 新版本排在最前，客户端报了不认识的版本时用它回落
@@ -27,8 +28,8 @@ const SUPPORTED_MCP_PROTOCOL_VERSIONS = new Set(SUPPORTED_MCP_PROTOCOL_VERSION_L
 const MCP_SERVER_INFO = {
   name: "device-event-logger",
   title: "User Device Event Logger",
-  version: "1.2.0",
-  description: "Query and prune user device event records stored in a database.",
+  version: "1.3.0",
+  description: "Query device events and manage temporary, user-authorized iOS Shortcut app restrictions.",
 };
 
 const MCP_SECURITY_SCHEMES = [{ type: "oauth2", scopes: ["events"] }];
@@ -336,7 +337,7 @@ async function callDeleteEventsTool(
   }
 }
 
-async function handleMcpRequest(message: JsonRpcMessage, sql: postgres.Sql, offsetMinutes: number, authenticated: boolean) {
+async function handleMcpRequest(message: JsonRpcMessage, sql: postgres.Sql, offsetMinutes: number, authenticated: boolean, scopes: string[] = []) {
   const id = (message.id ?? null) as JsonRpcId;
   const method = typeof message.method === "string" ? message.method : "";
   const params = (message.params && typeof message.params === "object")
@@ -359,7 +360,8 @@ async function handleMcpRequest(message: JsonRpcMessage, sql: postgres.Sql, offs
         serverInfo: MCP_SERVER_INFO,
         instructions:
           "This server exposes user device event records. Use list_event_types to discover available event types, then use query_events to read records by time range, type, and value. " +
-          "delete_events removes records permanently: always run it once without confirm to preview the match count, show that count to the user, and only re-run it with confirm=true after they agree.",
+          "delete_events removes records permanently: always run it once without confirm to preview the match count, show that count to the user, and only re-run it with confirm=true after they agree. " +
+          "get_app_control reads temporary restrictions. set_app_control changes them only at the user's request or under an explicitly agreed rule. Only 小红书 is supported. Restrictions need a configured iOS Shortcut and are checked on app opening. Always use a finite duration and report the actual expiry; disabling is always available.",
       });
     }
     case "notifications/initialized":
@@ -368,23 +370,27 @@ async function handleMcpRequest(message: JsonRpcMessage, sql: postgres.Sql, offs
       return jsonRpcResult(id, {});
     case "tools/list":
       return jsonRpcResult(id, {
-        tools: [QUERY_EVENTS_TOOL, LIST_EVENT_TYPES_TOOL, DELETE_EVENTS_TOOL],
+        tools: [QUERY_EVENTS_TOOL, LIST_EVENT_TYPES_TOOL, DELETE_EVENTS_TOOL, ...CONTROL_TOOLS],
       });
     case "tools/call": {
+      const name = typeof params.name === "string" ? params.name : "";
+      const requiredScope = CONTROL_TOOLS.some(tool => tool.name === name) ? CONTROL_SCOPE : "events";
       // Discovery is public, but no tool can reach event queries or deletion before authentication.
-      if (!authenticated) {
+      if (!authenticated || !scopes.includes(requiredScope)) {
         return jsonRpcResult(id, {
-          content: [{ type: "text", text: "Connect your device event logger account to access records." }],
+          content: [{ type: "text", text: requiredScope === CONTROL_SCOPE ? "Authorize the app_controls permission to manage temporary app restrictions." : "Connect your device event logger account to access records." }],
           _meta: { "mcp/www_authenticate": [
-            `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource", scope="events", error="invalid_token", error_description="Connect your device event logger account"`,
+            `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-protected-resource", scope="${requiredScope}", error="${authenticated ? "insufficient_scope" : "invalid_token"}", error_description="Authorize the required device service permission"`,
           ] },
           isError: true,
         });
       }
-      const name = typeof params.name === "string" ? params.name : "";
       const args = (params.arguments && typeof params.arguments === "object")
         ? params.arguments as Record<string, unknown>
         : {};
+      if (CONTROL_TOOLS.some(tool => tool.name === name)) {
+        return jsonRpcResult(id, await callAppControlTool(name, args, sql));
+      }
       if (name === LIST_EVENT_TYPES_TOOL.name) {
         return jsonRpcResult(id, await callListEventTypesTool(args, sql));
       }
@@ -404,6 +410,7 @@ async function handleMcpRequest(message: JsonRpcMessage, sql: postgres.Sql, offs
 async function handleMcpPostInternal(c: Context<{ Bindings: Env; Variables: Vars }>, authenticated: boolean): Promise<Response> {
   const sql = c.var.sql;
   const offsetMinutes = c.var.offsetMinutes;
+  const scopes = c.var.oauthScopes ?? [];
 
   const version = c.req.header("mcp-protocol-version")?.trim();
   const protocolVersion = resolveResponseProtocolVersion(version);
@@ -439,7 +446,7 @@ async function handleMcpPostInternal(c: Context<{ Bindings: Env; Variables: Vars
         responses.push(jsonRpcError(null, -32600, "Invalid Request"));
         continue;
       }
-      responses.push(await handleMcpRequest(message, sql, offsetMinutes, authenticated));
+      responses.push(await handleMcpRequest(message, sql, offsetMinutes, authenticated, scopes));
     }
     if (!responses.length) {
       return c.body(null, 202);
@@ -461,7 +468,7 @@ async function handleMcpPostInternal(c: Context<{ Bindings: Env; Variables: Vars
     c.header("MCP-Protocol-Version", protocolVersion);
     return c.json(jsonRpcError(null, -32600, "Invalid Request"), 400);
   }
-  const response = await handleMcpRequest(message, sql, offsetMinutes, authenticated);
+  const response = await handleMcpRequest(message, sql, offsetMinutes, authenticated, scopes);
   if (response == null) {
     return c.body(null, 202);
   }
