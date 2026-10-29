@@ -94,7 +94,7 @@ Deno.test("未登录可以发现工具及 OAuth 要求，但查询仍返回授�
   const list = await app.fetch(mcpRequest({jsonrpc:"2.0",id:1,method:"tools/list"},{Authorization:""}), TEST_ENV);
   assertEquals(list.status,200);
   for (const tool of (await list.json()).result.tools) {
-    assertEquals(tool.securitySchemes,[{type:"oauth2",scopes:["events"]}]);
+    assertEquals(tool.securitySchemes,[{type:"oauth2",scopes:[tool.name.endsWith("app_control") ? "app_controls" : "events"]}]);
     assertEquals(tool._meta.securitySchemes,tool.securitySchemes);
   }
   const initialize = await app.fetch(mcpRequest({jsonrpc:"2.0",id:2,method:"initialize",params:{}},{Authorization:""}), TEST_ENV);
