@@ -66,6 +66,15 @@ export function createApp(options?: AppOptions) {
     return c.json({ error: "Not found" }, 404);
   });
 
+  app.get("/", (c) => c.json({ service: "device-event-logger", status: "running" }));
+
+  // Reject unauthenticated requests before opening a database connection.
+  app.use("*", (c, next) =>
+    /^\/(events|mcp)(\/|$)/.test(c.req.path)
+      ? authMiddleware(c, next)
+      : next()
+  );
+
   // DB + timezone injection
   app.use("*", async (c, next) => {
     if (!sqlInstance) {
@@ -81,14 +90,14 @@ export function createApp(options?: AppOptions) {
     await next();
   });
 
-  // Routes
-  app.route("/events", (() => {
-    const group = new Hono<{ Bindings: Env; Variables: Vars }>();
-    group.use("*", authMiddleware);
-    group.route("/", events);
-    return group;
-  })());
+  // Readiness includes schema initialization and a live database query.
+  app.get("/healthz", async (c) => {
+    await c.get("sql").unsafe("SELECT 1");
+    return c.json({ status: "ok" });
+  });
 
+  // Routes
+  app.route("/events", events);
   app.route("/mcp", mcp);
 
   return app;
