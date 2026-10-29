@@ -45,9 +45,12 @@ test('authorization enforces redirect/resource, CSRF, owner key and one-time con
   pending=html.match(/name="request" value="([^"]+)"/)![1];
   await db.query('UPDATE oauth_requests SET data=to_jsonb(data::text)');
   cookie=res.headers.get('set-cookie')!.split(';')[0];
+  assert.match(res.headers.get('set-cookie')!,/Max-Age=1800/);
   assert.match(res.headers.get('set-cookie')!,/HttpOnly/); assert.match(res.headers.get('set-cookie')!,/Secure/);
   assert.equal((await request('/oauth/authorize',form({request:pending,key:env.API_KEY},{origin:base}))).status,400);
-  assert.equal((await request('/oauth/authorize',form({request:pending,key:env.API_KEY},{cookie,origin:'https://evil.test'}))).status,403);
+  const badOrigin=await request('/oauth/authorize',form({request:pending,key:env.API_KEY},{cookie,origin:'https://evil.test'}));
+  assert.equal(badOrigin.status,403);assert.match(badOrigin.headers.get('content-type')!,/charset=UTF-8/i);
+  assert.match((await badOrigin.json()).error_description,/来源校验失败/);
   assert.equal((await request('/oauth/authorize',form({request:pending,key:'wrong'},{cookie,origin:base}))).status,401);
   const ok=await request('/oauth/authorize',form({request:pending,key:env.API_KEY},{cookie,origin:base}));
   assert.equal(ok.status,303);const target=new URL(ok.headers.get('location')!);
