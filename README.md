@@ -130,3 +130,26 @@ npm start
 | `DELETE` | `/events?days=N` | 删除 N 天前的记录 |
 
 `/events` 和 `/mcp` 需要在 `Authorization` 头里带上 API_KEY，写 `Bearer <key>` 或直接写 `<key>` 都可以。
+
+
+## 此部署实例的 ChatGPT OAuth 接入
+
+本实例在现有 Render 服务中提供 OAuth 授权网关；无需额外注册身份提供方账号。
+
+- MCP URL：`https://device-event-logger-4rtn.onrender.com/mcp`
+- 身份验证选择 **OAuth**。支持动态客户端注册（DCR），进阶客户端 ID/Secret 留空。
+- ChatGPT 跳转到本站授权页后，输入快捷指令使用的 API_KEY，明确同意授权。
+- 授权仅用于 MCP 的查询、列举类型和清理功能；删除有预览和确认要求。
+- `/events` 的现有密钥验证不变。OAuth 令牌不能用于该上传接口。
+- 授权码使用 PKCE S256，60 秒有效且只能使用一次；访问令牌有效期一小时，刷新令牌三十天且每次续期轮换。
+- 数据库只保存授权码和令牌的 SHA-256 摘要；Cookie 使用 Secure、HttpOnly、SameSite=Lax，并校验授权请求的来源。
+- 可信回调限于 ChatGPT 的正式 OAuth 回调路径。更换域名或客户端时需同步修改 `src/routes/oauth.ts` 的规范签发方和回调校验。
+
+### OAuth 集成验证
+
+测试使用临时 PGlite 数据库，不接触生产事件数据：
+
+```sh
+npm install --prefix /tmp/device-event-oauth-check --no-audit --no-fund @electric-sql/pglite
+OAUTH_TEST_MODULES=/tmp/device-event-oauth-check/node_modules node --experimental-strip-types --test test/oauth.node.test.ts
+```
