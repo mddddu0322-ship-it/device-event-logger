@@ -35,12 +35,11 @@ export type RetryOptions = {
   maxDelayMs?: number;
 };
 
-export const RETRY_DEFAULTS = { retries: 5, baseDelayMs: 1000, maxDelayMs: 8000 };
+export const RETRY_DEFAULTS = { retries: 3, baseDelayMs: 250, maxDelayMs: 500 };
 
 /**
- * 每次重试前的等待时长，指数退避并封顶：1s → 2s → 4s → 8s。
- * MCP 客户端的请求超时通常是 30 秒，等待总时长必须留在这个预算内，
- * 否则数据库冷启动时客户端会先一步超时报错。
+ * 连接耗时也占用客户端的超时预算。配合 3 秒连接超时，
+ * 三次连接尝试及退避约需 9.75 秒，避免原先五次 30 秒连接尝试。
  */
 export function backoffDelays(options: RetryOptions = {}): number[] {
   const { retries, baseDelayMs, maxDelayMs } = { ...RETRY_DEFAULTS, ...options };
@@ -65,5 +64,18 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions =
 }
 
 export function createSql(databaseUrl: string, options?: Record<string, unknown>): postgres.Sql {
-  return postgres(databaseUrl, { max: 1, ...options });
+  return postgres(databaseUrl, {
+    // App transitions arrive in bursts; a slow read must not occupy the only slot.
+    max: 3,
+    connect_timeout: 3,
+    idle_timeout: 20,
+    max_lifetime: 300,
+    ...options,
+    connection: {
+      application_name: "device-event-logger",
+      statement_timeout: 5000,
+      lock_timeout: 2000,
+      ...(options?.connection as Record<string, unknown> | undefined),
+    },
+  });
 }
