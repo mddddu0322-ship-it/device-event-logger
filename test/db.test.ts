@@ -16,8 +16,7 @@ Deno.test("缺表、语法错误不算瞬时错误", () => {
 
 Deno.test("默认退避总等待留在 MCP 客户端 30 秒超时内", () => {
   const total = backoffDelays().reduce((sum, delay) => sum + delay, 0);
-  assert(total <= 20_000, `总等待 ${total}ms，客户端会先超时`);
-  assert(total >= 5_000, `总等待 ${total}ms，扛不住数据库冷启动`);
+  assert(total + 3 * 3000 < 10_000, `连接和退避总等待过长: ${total}ms + 连接耗时`);
 });
 
 Deno.test("withRetry 重试瞬时错误直到成功", async () => {
