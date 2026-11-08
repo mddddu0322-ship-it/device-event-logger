@@ -34,6 +34,25 @@ export function createApp(options?: AppOptions) {
   const app = new Hono<{ Bindings: Env; Variables: Vars }>();
   const makeSql = options?.createSql ?? createSql;
 
+  // Log timing only: never log authorization headers, URLs with tokens, or bodies.
+  app.use("*", async (c, next) => {
+    const started = Date.now();
+    const requestId = crypto.randomUUID();
+    const path = c.req.path;
+    const slow = setTimeout(() => {
+      console.warn(JSON.stringify({ event: "request_slow", requestId, path, elapsedMs: Date.now() - started }));
+    }, 4000);
+    try {
+      await next();
+    } finally {
+      clearTimeout(slow);
+      if (path !== "/healthz" || c.res.status >= 400 || Date.now() - started >= 1000) {
+        console.log(JSON.stringify({ event: "request_complete", requestId, path,
+          method: c.req.method, status: c.res.status, elapsedMs: Date.now() - started }));
+      }
+    }
+  });
+
   let sqlInstance: postgres.Sql | null = null;
   let schemaReady = false;
   let schemaPromise: Promise<void> | null = null;
