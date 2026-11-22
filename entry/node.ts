@@ -37,6 +37,18 @@ async function probeCandidateDatabase() {
 }
 void probeCandidateDatabase();
 
+// Run a guarded catch-up copy while the old database is still live.
+// The switch flag remains independent; this operation cannot switch production reads.
+if (process.env.DATABASE_MIGRATE_ON_START === "true" && newDatabaseUrl && !useNewDatabase) {
+  void import("./migration.ts")
+    .then(({ copyFromOldDatabase }) => copyFromOldDatabase(activeDatabaseUrl, newDatabaseUrl))
+    .then((counts) => console.info(JSON.stringify({ event: "candidate_db_copy", status: "ok", counts })))
+    .catch((error) => console.error(JSON.stringify({
+      event: "candidate_db_copy", status: "failed", code: (error as { code?: string }).code ?? "unknown",
+    })));
+}
+
+
 serve({
   fetch: (request) => app.fetch(request, {
     API_KEY: process.env.API_KEY ?? "",
