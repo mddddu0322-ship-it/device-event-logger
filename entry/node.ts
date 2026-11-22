@@ -24,9 +24,12 @@ const app = createApp(databaseSchema ? {
 // Never log the database URL, login, password, or event contents.
 async function probeCandidateDatabase() {
   if (!newDatabaseUrl || useNewDatabase) return;
-  const test = postgres(newDatabaseUrl, { max: 1, connect_timeout: 5, ssl: "require" });
+  const test = postgres(newDatabaseUrl, {
+    max: 1, connect_timeout: 5, ssl: "require",
+    connection: { application_name: "device-event-logger", search_path: "device_event_logger,public", statement_timeout: 5000, lock_timeout: 2000 },
+  });
   try {
-    await test.unsafe("SELECT 1 FROM device_event_logger.events LIMIT 1");
+    await test.unsafe("SELECT 1 FROM events LIMIT 1");
     console.info(JSON.stringify({ event: "candidate_db_probe", status: "ok" }));
   } catch (error) {
     const code = (error as { code?: string }).code ?? "unknown";
@@ -48,6 +51,13 @@ if (process.env.DATABASE_MIGRATE_ON_START === "true" && newDatabaseUrl && !useNe
     })));
 }
 
+if (useNewDatabase && process.env.DATABASE_MIGRATE_ON_START === "true") {
+  // Block readiness until the final source-to-target catch-up has succeeded.
+  // If this fails Render retains the previous healthy deployment.
+  const { copyFromOldDatabase } = await import("./migration.ts");
+  const counts = await copyFromOldDatabase(process.env.DATABASE_URL ?? "", newDatabaseUrl!);
+  console.info(JSON.stringify({ event: "cutover_db_copy", status: "ok", counts }));
+}
 
 serve({
   fetch: (request) => app.fetch(request, {
