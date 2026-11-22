@@ -10,7 +10,7 @@ if (useNewDatabase && !newDatabaseUrl) {
 }
 const activeDatabaseUrl = useNewDatabase ? newDatabaseUrl! : (process.env.DATABASE_URL ?? "");
 
-const databaseSchema = useNewDatabase ? undefined : process.env.DATABASE_SCHEMA;
+const databaseSchema = useNewDatabase ? "device_event_logger" : process.env.DATABASE_SCHEMA;
 if (databaseSchema && !/^[a-z_][a-z0-9_]*$/.test(databaseSchema)) {
   throw new Error("Invalid DATABASE_SCHEMA");
 }
